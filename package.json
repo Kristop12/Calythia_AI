@@ -1,31 +1,35 @@
 {
-  "name": "apex-ui",
+  "name": "calythia-ui",
   "version": "1.0.0",
-  "description": "An animated autonomous-agent orb + reasoning-graph UI. Hand-written SVG/CSS, no 3D libraries.",
-  "license": "MIT",
+  "description": "Calythia — an animated autonomous-agent orb + reasoning-graph UI.",
   "private": false,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:e2e": "playwright test",
+    "playwright:install": "playwright install chromium",
+    "playwright:install-all": "playwright install"
   },
   "dependencies": {
+    "@react-three/fiber": "^9.6.1",
+    "@react-three/postprocessing": "^3.0.4",
+    "kokoro-js": "^1.2.1",
+    "lucide-react": "^0.511.0",
     "next": "15.3.8",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "lucide-react": "^0.511.0",
-    "three": "^0.184.0",
-    "@react-three/fiber": "^9.6.1",
-    "@react-three/postprocessing": "^3.0.4"
+    "three": "^0.184.0"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "^0.184.1",
     "eslint": "^9",
-    "eslint-config-next": "15.3.3"
+    "eslint-config-next": "15.3.3",
+    "typescript": "^5"
   }
 }

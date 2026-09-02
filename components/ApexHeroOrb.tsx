@@ -15,7 +15,7 @@ const ApexCore3D = dynamic(() => import("./ApexCore3D"), { ssr: false });
 const STAGE_W = 900;
 const STAGE_H = 900;
 
-export type OrbState = "idle" | "thinking" | "speaking";
+export type OrbState = "idle" | "listening" | "thinking" | "speaking";
 
 export default function ApexHeroOrb({ state: controlled, onStateChange, interactive = true }: { state?: OrbState; onStateChange?: (s: OrbState) => void; interactive?: boolean } = {}) {
   const boxRef = useRef<HTMLDivElement>(null);
@@ -23,11 +23,13 @@ export default function ApexHeroOrb({ state: controlled, onStateChange, interact
   const [inner, setInner] = useState<OrbState>("idle");
   const state = controlled ?? inner;
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const update = (s: OrbState) => { setInner(s); onStateChange?.(s); };
 
   // Motion-sensitive users get the static golden ring without the particle sim.
   useEffect(() => {
+    setMounted(true);
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => setReducedMotion(mq.matches);
     apply();
@@ -73,7 +75,7 @@ export default function ApexHeroOrb({ state: controlled, onStateChange, interact
             onMouseDown: (e: React.MouseEvent) => e.preventDefault(), // clicks don't leave a focus ring; keyboard focus still shows
             role: "button",
             tabIndex: 0,
-            "aria-label": "Apex core - tap to energize",
+            "aria-label": "Calythia core - tap to energize",
           }
         : { "aria-hidden": true as const })}
       style={{ position: "relative", width: "100%", height: "100%", cursor: interactive ? "pointer" : "default", pointerEvents: interactive ? "auto" : "none", borderRadius: "50%", userSelect: "none" }}
@@ -95,7 +97,7 @@ export default function ApexHeroOrb({ state: controlled, onStateChange, interact
         </div>
         {/* cyan particle core - contained to this stage instead of full-screen.
             Skipped entirely under prefers-reduced-motion (static ring remains). */}
-        {!reducedMotion && <ApexCore3D state={state} variant="particles" contained onClick={undefined} />}
+        {!mounted || reducedMotion ? null : <ApexCore3D state={state} variant="particles" contained onClick={undefined} />}
       </div>
     </div>
   );

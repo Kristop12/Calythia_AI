@@ -2,15 +2,15 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "APEX-UI — Autonomous-agent orb interface",
+  title: "Calythia — Autonomous-agent orb interface",
   description:
-    "An open-source (MIT) animated orb + reasoning-graph UI. Hand-written SVG/CSS, no 3D libraries.",
+    "Calythia: an animated orb + reasoning-graph UI. Hand-written SVG/CSS with a small react-three-fiber particle core.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

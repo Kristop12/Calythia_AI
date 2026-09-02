@@ -73,10 +73,10 @@ export default function OrbStatusBar({ state = 'idle' }) {
         ))}
 
         {/* Voice discoverability (UI sweep) — the front page is voice-driven; one whisper-quiet hint on
-            standby teaches the commands. Hidden the moment Apex is active. */}
+            standby teaches the commands. Hidden the moment Calythia is active. */}
         {!isActive && (
           <text className="sb-hint" x={cx} y={cy + 80} textAnchor="middle" fill={GOLD} fontSize="9" fontFamily="'Share Tech Mono', monospace"
-            letterSpacing="0.14em" opacity="0.32">TAP THE CORE · CLICK AN AGENT · SCROLL FOR THE STORY</text>
+            letterSpacing="0.14em" opacity="0.32">TAP TALK · CONVERSE · CLICK AN AGENT</text>
         )}
       </svg>
     </div>

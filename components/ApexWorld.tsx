@@ -12,9 +12,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import ApexHeroOrb, { type OrbState } from "./ApexHeroOrb";
+import ApexChat from "./ApexChat";
 import ReasoningWebJs from "./ReasoningWeb";
 import ShaderBackgroundJs from "./ShaderBackground";
-import OrbStatusBar from "./OrbStatusBar";
 
 export type NodeSel = { name: string; key: string; color: string };
 
@@ -97,7 +97,7 @@ export const INFO: Record<string, AgentInfo> = {
     caps: ["Background removal and replacement", "Text overlays", "Resize for social media", "Filters and enhancement"],
     asks: ["Remove background", "Resize for IG"] },
   developer: { role: "Keeper of the build log", status: "standby",
-    caps: ["Keeps Apex's development log", "Recaps what shipped - day / week / month", "Future: builds Apex itself"],
+    caps: ["Keeps Calythia's development log", "Recaps what shipped - day / week / month", "Future: builds Calythia itself"],
     asks: ["Recap last week"] },
   analytics: { role: "Numbers feed", status: "integration",
     caps: ["Performance metrics across every channel", "Feeds the weekly reviews"] },
@@ -112,7 +112,7 @@ export const INFO: Record<string, AgentInfo> = {
 };
 
 const STATUS_LINE: Record<AgentInfo["status"], { color: string; text: string }> = {
-  online: { color: "#34d399", text: "Online - Apex routes work to it automatically" },
+  online: { color: "#34d399", text: "Online - Calythia routes work to it automatically" },
   standby: { color: "#c9a84c", text: "Standby - in active development" },
   integration: { color: "#7f9bb3", text: "Integration - wired into the core" },
 };
@@ -121,7 +121,7 @@ const STATUS_LINE: Record<AgentInfo["status"], { color: string; text: string }> 
 export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => void }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ sx: number; sy: number } | null>(null);
-  const info = INFO[sel.key] ?? { role: "Specialist", status: "online" as const, caps: ["Part of the Apex core"] };
+  const info = INFO[sel.key] ?? { role: "Specialist", status: "online" as const, caps: ["Part of the Calythia core"] };
   const c = sel.color;
   const status = STATUS_LINE[info.status];
 
@@ -232,20 +232,18 @@ export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => v
 export default function ApexWorld() {
   const [selected, setSelected] = useState<NodeSel | null>(null);
   const [reduced, setReduced] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-  // A tap cycles idle → thinking → speaking → idle. That state drives the
-  // backdrop, the light-cast and the reasoning web's activity level.
-  const [showState, setShowState] = useState<OrbState>("idle");
-  const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const orbState: OrbState = showState;
+  // Chat owns orb state while a turn is active (thinking / speaking / TTS).
+  // Center tap is a demo-only cycle when chat is idle — no auto-reset timer,
+  // so it never fights the LM Studio + TTS lifecycle.
+  const [orbState, setOrbState] = useState<OrbState>("idle");
+  const chatBusy = useRef(false);
 
   const boost = () => {
-    const next: OrbState = showState === "idle" ? "thinking" : showState === "thinking" ? "speaking" : "idle";
-    setShowState(next);
-    if (showTimer.current) clearTimeout(showTimer.current);
-    showTimer.current = setTimeout(() => setShowState("idle"), 8000);
+    if (chatBusy.current) return;
+    setOrbState((s) => (s === "idle" ? "thinking" : s === "thinking" ? "speaking" : "idle"));
   };
-  useEffect(() => () => { if (showTimer.current) clearTimeout(showTimer.current); }, []);
 
   // Single entry point for opening an agent, shared by the SVG graph and the
   // hidden accessible list, so both routes behave identically.
@@ -254,6 +252,7 @@ export default function ApexWorld() {
   };
 
   useEffect(() => {
+    setMounted(true);
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => setReduced(mq.matches);
     apply();
@@ -261,8 +260,12 @@ export default function ApexWorld() {
     return () => mq.removeEventListener("change", apply);
   }, []);
 
-  // orb tap cycle → the web's activity level (same states the app streams)
-  const webState = orbState === "thinking" ? "processing" : orbState === "speaking" ? "speaking" : "standby";
+  // orb state → the web's activity level (same states the app streams)
+  const webState =
+    orbState === "thinking" ? "processing"
+    : orbState === "speaking" ? "speaking"
+    : orbState === "listening" ? "listening"
+    : "standby";
 
   return (
     <div style={{ position: "absolute", inset: 0, overflow: "hidden", userSelect: "none" }}>
@@ -275,7 +278,7 @@ export default function ApexWorld() {
       }} />
 
       {/* background waves - the app's WebGL shader at the app's opacity */}
-      {!reduced && (
+      {mounted && !reduced && (
         <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 0 }}>
           <ShaderBackground opacity={0.12} voiceActive={orbState === "speaking"} gold={false} />
         </div>
@@ -307,7 +310,7 @@ export default function ApexWorld() {
       </div>
 
       {/* Keyboard and screen-reader equivalent of the agent graph. */}
-      <nav className="visually-hidden" aria-label="Apex agents">
+      <nav className="visually-hidden" aria-label="Calythia agents">
         <ul>
           {ROSTER.map((a) => (
             <li key={a.key}>
@@ -329,7 +332,7 @@ export default function ApexWorld() {
       <div
         role="button"
         tabIndex={0}
-        aria-label="Apex core - tap to energize"
+        aria-label="Calythia core - tap to energize"
         onClick={boost}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); boost(); } }}
         onMouseDown={(e) => e.preventDefault()}
@@ -340,8 +343,17 @@ export default function ApexWorld() {
         }}
       />
 
-      {/* equalizer + STANDBY cluster */}
-      <OrbStatusBar state={orbState} />
+      {/* equalizer replaced by VoiceDock inside ApexChat */}
+
+      <ApexChat
+        onStateChange={(s) => {
+          chatBusy.current = s !== "idle";
+          setOrbState(s);
+        }}
+        onBusyChange={(busy) => {
+          chatBusy.current = busy;
+        }}
+      />
 
       {selected && <AgentOverview sel={selected} onClose={() => setSelected(null)} />}
     </div>

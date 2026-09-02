@@ -113,7 +113,7 @@ export default function ReasoningWeb({ state = 'standby', trace = null, mode = '
       gold = mk('circle', { cx: AX, cy: AY, r: 11, fill: '#ffcf6b', filter: 'url(#rw-glow)' })
       hot = mk('circle', { cx: AX, cy: AY, r: 4, fill: '#ffffff', filter: 'url(#rw-glow)' })
       const lab = mk('text', { x: AX, y: AY + 34, 'text-anchor': 'middle', 'font-size': 12, 'font-family': 'inherit', fill: '#ffcf6b' })
-      lab.textContent = 'Apex'
+      lab.textContent = 'Calythia'
       coreG.append(halo, ring, gold, hot, lab)
     }
 
@@ -313,7 +313,7 @@ export default function ReasoningWeb({ state = 'standby', trace = null, mode = '
       <svg ref={svgRef} width="100%" height="100%" viewBox={viewBox || "0 0 680 480"}
            preserveAspectRatio="xMidYMid meet"
            style={{ fontFamily: 'inherit', pointerEvents: 'none', overflow: 'visible' }}
-           role="img" aria-label="Apex reasoning web" />
+           role="img" aria-label="Calythia reasoning web" />
     </>
   )
 }
