@@ -7,3 +7,6 @@ build/
 next-env.d.ts
 .DS_Store
 .vercel
+
+# Kokoro / local ONNX weights (large; download via kokoro-js or keep locally)
+*.onnx
