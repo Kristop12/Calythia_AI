@@ -1,4 +1,11 @@
 import { NextResponse } from "next/server";
+import { normalizeAgentMode } from "@/lib/agentMode";
+import { streamAgentLoop } from "@/lib/agentLoop";
+import {
+  normalizeProvider,
+  resolveLlmTarget,
+  type LlmTarget,
+} from "@/lib/llmProvider";
 import {
   appendMemoryNote,
   extractRememberPhrase,
@@ -10,14 +17,18 @@ import {
   buildMcpIntegrations,
   filterMcpIntegrationsForQuery,
   lmStudioAuthHeaders,
-  lmStudioOpenAiBase,
   lmStudioOrigin,
   lmStudioSseToOpenAi,
   mcpEnabled,
-  resolveChatModel,
   toNativeChatParts,
+  withOpenInterpreterHint,
   type ChatMessage,
 } from "@/lib/lmstudio";
+import {
+  NATIVE_TOOLS_SYSTEM_HINT,
+  nativeToolsForRequest,
+  shouldUseNativeTools,
+} from "@/lib/tools/routeNative";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +57,20 @@ function withRag(messages: ChatMessage[], memoryBlock: string): ChatMessage[] {
   return out;
 }
 
+function withNativeToolsHint(messages: ChatMessage[]): ChatMessage[] {
+  const out = messages.map((m) => ({ ...m }));
+  const sysIdx = out.findIndex((m) => m.role === "system");
+  if (sysIdx >= 0) {
+    out[sysIdx] = {
+      ...out[sysIdx],
+      content: `${out[sysIdx].content}\n\n---\n${NATIVE_TOOLS_SYSTEM_HINT}`,
+    };
+  } else {
+    out.unshift({ role: "system", content: NATIVE_TOOLS_SYSTEM_HINT });
+  }
+  return out;
+}
+
 function sseHeaders(extra?: Record<string, string>) {
   return {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -58,22 +83,22 @@ function sseHeaders(extra?: Record<string, string>) {
 async function streamOpenAiCompatible(
   enriched: ChatMessage[],
   signal: AbortSignal,
-  model: string | null,
+  target: LlmTarget,
 ): Promise<Response> {
   const payload: Record<string, unknown> = {
     messages: enriched,
     stream: true,
     temperature: 0.7,
   };
-  if (model) payload.model = model;
+  if (target.model) payload.model = target.model;
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${lmStudioOpenAiBase()}/chat/completions`, {
+    upstream = await fetch(`${target.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...lmStudioAuthHeaders(),
+        ...target.headers,
       },
       body: JSON.stringify(payload),
       signal,
@@ -82,7 +107,9 @@ async function streamOpenAiCompatible(
     return NextResponse.json(
       {
         error:
-          "Cannot reach LM Studio. Start the local server (default http://127.0.0.1:1234) and load a model.",
+          target.provider === "grok"
+            ? "Cannot reach xAI Grok API. Check network and XAI_API_KEY."
+            : "Cannot reach LM Studio. Start the local server (default http://127.0.0.1:1234) and load a model.",
       },
       { status: 502 },
     );
@@ -91,7 +118,7 @@ async function streamOpenAiCompatible(
   if (!upstream.ok || !upstream.body) {
     const detail = await upstream.text().catch(() => "");
     return NextResponse.json(
-      { error: detail || `LM Studio returned ${upstream.status}` },
+      { error: detail || `LLM returned ${upstream.status}` },
       { status: upstream.status >= 400 ? upstream.status : 502 },
     );
   }
@@ -100,7 +127,8 @@ async function streamOpenAiCompatible(
     status: 200,
     headers: sseHeaders({
       "X-Calythia-Path": "openai",
-      ...(model ? { "X-Calythia-Model": model } : {}),
+      "X-Calythia-Provider": target.provider,
+      ...(target.model ? { "X-Calythia-Model": target.model } : {}),
     }),
   });
 }
@@ -239,7 +267,13 @@ async function streamNativeMcp(
 }
 
 export async function POST(request: Request) {
-  let body: { messages?: ChatMessage[]; mcp?: boolean };
+  let body: {
+    messages?: ChatMessage[];
+    mcp?: boolean;
+    agentMode?: string;
+    provider?: string;
+    model?: string;
+  };
   try {
     body = await request.json();
   } catch {
@@ -265,16 +299,63 @@ export async function POST(request: Request) {
   const chunks = await retrieveMemoryForQuery(userText || "christopher calythia", 5);
   const enriched = withRag(messages, formatMemoryContext(chunks));
 
-  const chatModel = await resolveChatModel(request.signal);
+  const provider = normalizeProvider(body.provider);
+  let target: LlmTarget;
+  try {
+    target = await resolveLlmTarget({
+      provider,
+      model: body.model,
+      signal: request.signal,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "LLM provider misconfigured";
+    return NextResponse.json({ error: msg }, { status: 401 });
+  }
 
-  const wantMcp = mcpEnabled() && body.mcp !== false;
-  if (wantMcp) {
-    const all = await buildMcpIntegrations();
-    const integrations = filterMcpIntegrationsForQuery(userText, all);
-    if (integrations.length) {
-      return streamNativeMcp(enriched, integrations, request.signal, chatModel);
+  const agentMode = normalizeAgentMode(body.agentMode);
+
+  // Native tool loop (Jarvis) — Calythia owns execution
+  if (shouldUseNativeTools(userText, agentMode)) {
+    const tools = nativeToolsForRequest(userText, agentMode);
+    if (tools.length) {
+      const nativeMessages = withNativeToolsHint(enriched);
+      try {
+        return await streamAgentLoop(nativeMessages, tools, target, request.signal);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Native tool loop failed";
+        // MCP fallback only for local LM Studio
+        if (
+          provider === "lmstudio" &&
+          agentMode !== "pc" &&
+          mcpEnabled() &&
+          body.mcp !== false
+        ) {
+          console.warn("[calythia] native tools failed, trying MCP:", msg);
+        } else {
+          return NextResponse.json({ error: msg }, { status: 502 });
+        }
+      }
     }
   }
 
-  return streamOpenAiCompatible(enriched, request.signal, chatModel);
+  const wantMcp =
+    provider === "lmstudio" &&
+    mcpEnabled() &&
+    body.mcp !== false &&
+    agentMode !== "off";
+  if (wantMcp) {
+    const all = await buildMcpIntegrations();
+    const integrations = filterMcpIntegrationsForQuery(userText, all, agentMode);
+    if (integrations.length) {
+      const mcpMessages = withOpenInterpreterHint(enriched, integrations);
+      return streamNativeMcp(
+        mcpMessages,
+        integrations,
+        request.signal,
+        target.model,
+      );
+    }
+  }
+
+  return streamOpenAiCompatible(enriched, request.signal, target);
 }

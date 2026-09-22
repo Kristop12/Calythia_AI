@@ -1,7 +1,13 @@
 import { readFile } from "fs/promises";
 import { homedir } from "os";
 import path from "path";
-import { allowedToolsForQuery } from "@/lib/mcpRoute";
+import { normalizeAgentMode, type AgentMode } from "@/lib/agentMode";
+import {
+  allPersonalPcTools,
+  allowedToolsForQuery,
+  wantsDiscretePcAction,
+  wantsExecution,
+} from "@/lib/mcpRoute";
 
 export type McpIntegration =
   | string
@@ -190,32 +196,49 @@ function integrationLabel(i: McpIntegration): string {
 export function filterMcpIntegrationsForQuery(
   userText: string,
   integrations: McpIntegration[],
+  agentMode: AgentMode = "auto",
 ): McpIntegration[] {
-  const q = userText.toLowerCase();
-  const wantsWeather =
-    /\bweather\b|\bforecast\b|\btemperature\b|\bhumidity\b|\brain(?:y|ing)?\b/.test(q);
-  const wantsSearch =
-    /\b(?:search|google|look\s*up|find\s+online|duckduckgo|web\s+search|latest\s+news|who\s+is|what\s+is\s+trending)\b/.test(
-      q,
-    );
+  const mode = normalizeAgentMode(agentMode);
+  if (mode === "off") return [];
 
-  const pcTools = allowedToolsForQuery(userText);
+  const trimmed = userText.trim();
+  const chitchat = /^(hi|hello|hey|yo|thanks|thank you|ok|okay|yes|no|bye|good (morning|afternoon|evening|night)|how are you|what('?s| is) your name|who are you)[.!?]*$/i.test(
+    trimmed,
+  );
+  if (chitchat) return [];
+
+  const forcePc = mode === "pc";
+  const discrete = wantsDiscretePcAction(userText);
+  const usePc =
+    forcePc || (discrete && (mode === "auto" || mode === "code"));
+  const useOi =
+    (mode === "code" && !discrete) ||
+    (mode === "auto" && wantsExecution(userText) && !discrete);
+
+  let pcTools = usePc ? allowedToolsForQuery(userText) : null;
+  if (forcePc && !pcTools?.length) pcTools = allPersonalPcTools();
+
+  let oiFallback: McpIntegration | null = null;
+  let oiAdded = false;
 
   const out: McpIntegration[] = [];
   for (const i of integrations) {
     const label = integrationLabel(i).toLowerCase();
 
-    if (/weather/.test(label) && !/personal/.test(label)) {
-      if (wantsWeather) out.push(i);
-      continue;
-    }
-    if (/duckduckgo|brave|bing/.test(label) || label === "search") {
-      if (wantsSearch) out.push(i);
+    if (/open[-_]?interpreter/.test(label)) {
+      if (!useOi) continue;
+      const norm = integrationLabel(i);
+      if (norm === "open-interpreter") {
+        out.push(i);
+        oiAdded = true;
+      } else if (!oiFallback) {
+        oiFallback = i;
+      }
       continue;
     }
 
     if (/personal[-_]?pc/.test(label)) {
-      if (!pcTools?.length) continue;
+      if (!usePc || !pcTools?.length) continue;
       out.push({
         type: "plugin",
         id: label.startsWith("mcp/") ? label : `mcp/${label}`,
@@ -224,8 +247,42 @@ export function filterMcpIntegrationsForQuery(
       continue;
     }
 
-    // Unknown servers: only if something matched for PC-style intent
-    if (pcTools?.length) out.push(i);
+    if (!useOi && pcTools?.length && !/interpreter/.test(label)) out.push(i);
+  }
+
+  if (useOi && !oiAdded && oiFallback) out.push(oiFallback);
+
+  return out;
+}
+
+export const OPEN_INTERPRETER_MCP_HINT =
+  "Open Interpreter MCP tools: call codex with prompt = the user's full request (required). " +
+  "Pass approval-policy \"never\" and sandbox \"workspace-write\". " +
+  "Use codex-reply with threadId to continue. " +
+  "You MUST call codex for shell/scripts/automation — never claim you ran something without calling codex.";
+
+export function integrationsUseOpenInterpreter(
+  integrations: McpIntegration[],
+): boolean {
+  return integrations.some((i) =>
+    /open[-_]?interpreter/i.test(
+      typeof i === "string" ? i : "id" in i ? i.id : i.server_label,
+    ),
+  );
+}
+
+export function withOpenInterpreterHint(
+  messages: ChatMessage[],
+  integrations: McpIntegration[],
+): ChatMessage[] {
+  if (!integrationsUseOpenInterpreter(integrations)) return messages;
+  const out = messages.map((m) => ({ ...m }));
+  const sysIdx = out.findIndex((m) => m.role === "system");
+  const block = `---\n${OPEN_INTERPRETER_MCP_HINT}`;
+  if (sysIdx >= 0) {
+    out[sysIdx] = { ...out[sysIdx], content: `${out[sysIdx].content}\n\n${block}` };
+  } else {
+    out.unshift({ role: "system", content: block });
   }
   return out;
 }

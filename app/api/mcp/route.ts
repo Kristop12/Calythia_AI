@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { normalizeAgentMode } from "@/lib/agentMode";
 import {
   MCP_SETUP_HINT,
   buildMcpIntegrations,
@@ -9,6 +10,11 @@ import {
   resolveChatModel,
 } from "@/lib/lmstudio";
 import { describeToolRouting } from "@/lib/mcpRoute";
+import {
+  nativeToolNamesForRequest,
+  shouldUseNativeTools,
+} from "@/lib/tools/routeNative";
+import { nativeToolsEnabled } from "@/lib/tools/safety";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,14 +24,21 @@ export async function GET(request: Request) {
   const labels = await loadMcpServerLabels();
   const integrations = await buildMcpIntegrations();
   const q = new URL(request.url).searchParams.get("q")?.trim() || "";
-  const routed = q ? filterMcpIntegrationsForQuery(q, integrations) : null;
-  const routing = q ? describeToolRouting(q) : null;
+  const mode = normalizeAgentMode(new URL(request.url).searchParams.get("mode"));
+  const routed = q ? filterMcpIntegrationsForQuery(q, integrations, mode) : null;
+  const routing = q ? describeToolRouting(q, mode) : null;
+  const useNative = q ? shouldUseNativeTools(q, mode) : false;
+  const nativeTools = q && useNative ? nativeToolNamesForRequest(q, mode) : null;
 
   return NextResponse.json({
     enabled: mcpEnabled(),
+    nativeToolsEnabled: nativeToolsEnabled(),
+    useNativeTools: useNative,
+    nativeToolNames: nativeTools,
     origin: lmStudioOrigin(),
     servers: labels,
     integrations,
+    agentMode: mode,
     model: await resolveChatModel().catch(() => null),
     apiTokenConfigured: (() => {
       const t = process.env.LM_STUDIO_API_TOKEN?.trim() || "";

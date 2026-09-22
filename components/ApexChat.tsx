@@ -5,6 +5,21 @@ import type { OrbState } from "./ApexHeroOrb";
 import { createSpeaker, listVoices, loadSavedVoiceURI, unlockAudio, type SpeakController, type VoiceOption } from "@/lib/speak";
 import { createListener, setWhisperTranscribeDisabled, speechRecognitionSupported, type ListenController } from "@/lib/listen";
 import { parseCalyWake } from "@/lib/wake";
+import {
+  AGENT_MODE_META,
+  loadAgentMode,
+  saveAgentMode,
+  type AgentMode,
+} from "@/lib/agentMode";
+import {
+  GROK_CURATED_MODELS,
+  LLM_PROVIDER_META,
+  loadLlmModel,
+  loadLlmProvider,
+  saveLlmModel,
+  saveLlmProvider,
+  type LlmProvider,
+} from "@/lib/llmProviderClient";
 import VoiceDock, { VoiceStatusPill, type VoiceDockPhase } from "./VoiceDock";
 
 type Role = "user" | "assistant" | "system";
@@ -17,7 +32,7 @@ const SYSTEM: Msg = {
   id: "system",
   role: "system",
   content:
-    "You are Calythia in a spoken conversation — Christopher also calls you Caly. You were built from scratch by Christopher, a software engineer — he is your creator. Address him as Christopher when it fits naturally. You receive retrieved project memory notes when relevant — treat them as durable truth; do not invent personal facts. If Christopher says \"remember …\", acknowledge briefly that you will keep it. When personal-pc tools are offered for this turn, use only those tools for live PC/file/email/weather/web facts — do not invent them. If no tools are offered, answer from conversation and memory only. Keep answers short (1–3 sentences), clear, and natural to say aloud. No markdown, no bullet lists unless asked.",
+    "You are Calythia in a spoken conversation — Christopher also calls you Caly. You were built from scratch by Christopher, a software engineer — he is your creator. Address him as Christopher when it fits naturally. You receive retrieved project memory notes when relevant — treat them as durable truth; do not invent personal facts. If Christopher says \"remember …\", acknowledge briefly that you will keep it. When tools are available, call them for live PC/browser/file/YouTube facts — never invent results. Use open_url for opening sites; youtube_info for video metadata; browse_web for web search; run_agent_task for scripts. If no tools are offered, answer from conversation and memory only. Keep answers short (1–3 sentences), clear, and natural to say aloud. No markdown, no bullet lists unless asked.",
 };
 
 const WAKE_ACKS = ["Yes?", "I'm here.", "Go ahead.", "Listening."];
@@ -82,6 +97,11 @@ export default function ApexChat({
   const [talkMode, setTalkMode] = useState(false);
   const [uiMode, setUiMode] = useState<"chat" | "voice">("chat");
   const [lang, setLang] = useState("EN");
+  const [agentMode, setAgentMode] = useState<AgentMode>("auto");
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("lmstudio");
+  const [llmModel, setLlmModel] = useState<string>("");
+  const [modelOptions, setModelOptions] = useState<{ id: string; label: string }[]>([]);
+  const [grokConfigured, setGrokConfigured] = useState(true);
 
   const listRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -91,6 +111,8 @@ export default function ApexChat({
   const ttsBusyRef = useRef(false);
   const listeningRef = useRef(false);
   const talkModeRef = useRef(false);
+  /** After "Eli" / wake+command, accept follow-ups without repeating the wake word. */
+  const voiceEngagedRef = useRef(false);
   const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendRef = useRef<(text?: string) => Promise<void>>(async () => {});
 
@@ -121,18 +143,21 @@ export default function ApexChat({
   const scheduleListen = useCallback(() => {
     if (!talkModeRef.current) return;
     clearResume();
-    resumeTimer.current = setTimeout(() => {
-      resumeTimer.current = null;
+    const tryOpen = () => {
+      if (!talkModeRef.current) return;
       if (
-        talkModeRef.current &&
-        !streamingRef.current &&
-        !listeningRef.current &&
-        !ttsBusyRef.current &&
-        !(speakerRef.current?.busy() ?? false)
+        streamingRef.current ||
+        listeningRef.current ||
+        ttsBusyRef.current ||
+        (speakerRef.current?.busy() ?? false)
       ) {
-        startListening();
+        resumeTimer.current = setTimeout(tryOpen, 450);
+        return;
       }
-    }, 550);
+      resumeTimer.current = null;
+      startListening();
+    };
+    resumeTimer.current = setTimeout(tryOpen, 550);
   }, [startListening]);
 
   const recomputeIdle = useCallback(() => {
@@ -149,6 +174,11 @@ export default function ApexChat({
   }, [onBusyChange, scheduleListen, setOrb]);
 
   useEffect(() => {
+    setAgentMode(loadAgentMode());
+    const provider = loadLlmProvider();
+    setLlmProvider(provider);
+    setLlmModel(loadLlmModel());
+
     const saved = loadSavedVoiceURI();
     if (saved && voices.some((v) => v.uri === saved)) {
       setVoiceURI(saved);
@@ -161,6 +191,51 @@ export default function ApexChat({
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/models?provider=${llmProvider}`)
+      .then((r) => r.json())
+      .then(
+        (j: {
+          models?: { id: string; label: string }[];
+          configured?: boolean;
+          defaultModel?: string | null;
+        }) => {
+          if (cancelled) return;
+          const models =
+            j.models?.length
+              ? j.models
+              : llmProvider === "grok"
+                ? GROK_CURATED_MODELS
+                : [];
+          setModelOptions(models);
+          if (llmProvider === "grok") setGrokConfigured(j.configured !== false);
+          const preferred =
+            loadLlmModel() ||
+            j.defaultModel ||
+            models[0]?.id ||
+            "";
+          if (preferred && models.some((m) => m.id === preferred)) {
+            setLlmModel(preferred);
+            saveLlmModel(preferred);
+          } else if (models[0]?.id) {
+            setLlmModel(models[0].id);
+            saveLlmModel(models[0].id);
+          }
+        },
+      )
+      .catch(() => {
+        if (cancelled) return;
+        if (llmProvider === "grok") {
+          setModelOptions(GROK_CURATED_MODELS);
+          setGrokConfigured(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [llmProvider]);
 
   useEffect(() => {
     speakerRef.current = createSpeaker({
@@ -178,8 +253,15 @@ export default function ApexChat({
       },
       onStatus: (status, detail) => {
         if (status === "loading") setTtsStatus(detail || "Loading Kokoro…");
-        else if (status === "ready") setTtsStatus("");
-        else if (status === "fallback") setTtsStatus("System voice (Kokoro unavailable)");
+        else if (status === "ready") {
+          setTtsStatus(detail || "Kokoro ready");
+          window.setTimeout(() => setTtsStatus(""), 2500);
+        } else if (status === "fallback")
+          setTtsStatus(
+            detail
+              ? `System voice (${detail})`
+              : "System voice (Kokoro unavailable)",
+          );
         else setTtsStatus(detail || "TTS error");
       },
     });
@@ -213,12 +295,12 @@ export default function ApexChat({
         listeningRef.current = false;
         setListening(false);
         setTranscribing(false);
-        if (!streamingRef.current && !ttsBusyRef.current) {
-          if (talkModeRef.current) scheduleListen();
-          else {
-            setOrb("idle");
-            onBusyChange?.(false);
-          }
+        if (talkModeRef.current) {
+          // scheduleListen no-ops while thinking/speaking; retries when idle.
+          scheduleListen();
+        } else if (!streamingRef.current && !ttsBusyRef.current) {
+          setOrb("idle");
+          onBusyChange?.(false);
         }
       },
       onInterim: (text) => setInput(text),
@@ -240,6 +322,7 @@ export default function ApexChat({
         }
         if (wake.kind === "wake_only") {
           // "Hey Caly" / "Caly" alone — short ack, keep listening in talk mode
+          voiceEngagedRef.current = true;
           setInput(text);
           const ack = WAKE_ACKS[Math.floor(Math.random() * WAKE_ACKS.length)]!;
           speakerRef.current?.cancel();
@@ -256,6 +339,15 @@ export default function ApexChat({
           return;
         }
 
+        // Until the user addresses Calythia once, ignore background talk / TV / noise.
+        if (talkModeRef.current && !wake.woke && !voiceEngagedRef.current) {
+          setInput("");
+          scheduleListen();
+          return;
+        }
+
+        if (wake.woke) voiceEngagedRef.current = true;
+
         setInput(wake.woke ? `Caly: ${wake.text}` : wake.text);
         void sendRef.current(wake.text);
       },
@@ -269,6 +361,7 @@ export default function ApexChat({
           );
         setError(message);
         if (fatal) {
+          voiceEngagedRef.current = false;
           talkModeRef.current = false;
           setTalkMode(false);
           setUiMode("chat");
@@ -293,6 +386,7 @@ export default function ApexChat({
 
   const stopTalk = useCallback(() => {
     clearResume();
+    voiceEngagedRef.current = false;
     talkModeRef.current = false;
     setTalkMode(false);
     abortRef.current?.abort();
@@ -318,6 +412,7 @@ export default function ApexChat({
     }
     setError(null);
     void unlockAudio();
+    voiceEngagedRef.current = false;
     talkModeRef.current = true;
     setTalkMode(true);
     setUiMode("voice");
@@ -356,7 +451,12 @@ export default function ApexChat({
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: payload }),
+        body: JSON.stringify({
+          messages: payload,
+          agentMode,
+          provider: llmProvider,
+          model: llmModel || undefined,
+        }),
         signal: ac.signal,
       });
 
@@ -416,7 +516,7 @@ export default function ApexChat({
         onBusyChange?.(false);
       }
     }
-  }, [input, messages, muted, onBusyChange, scheduleListen, setOrb]);
+  }, [agentMode, input, llmModel, llmProvider, messages, muted, onBusyChange, scheduleListen, setOrb]);
 
   sendRef.current = send;
 
@@ -485,6 +585,81 @@ export default function ApexChat({
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.2em", color: "rgba(240,237,232,0.55)", textTransform: "uppercase", flex: 1 }}>
               Messages
             </span>
+            <select
+              value={llmProvider}
+              onChange={(e) => {
+                const p = e.target.value as LlmProvider;
+                setLlmProvider(p);
+                saveLlmProvider(p);
+                if (p === "grok" && !grokConfigured) {
+                  setError("Add XAI_API_KEY to .env.local and restart npm run dev.");
+                } else {
+                  setError(null);
+                }
+              }}
+              aria-label="LLM provider"
+              title={LLM_PROVIDER_META[llmProvider].hint}
+              style={{
+                maxWidth: 78,
+                background: "rgba(8,17,31,0.9)",
+                border: "1px solid rgba(240,237,232,0.12)",
+                borderRadius: 8,
+                color: "#f0ede8",
+                fontSize: 11,
+                padding: "4px 6px",
+              }}
+            >
+              {(Object.keys(LLM_PROVIDER_META) as LlmProvider[]).map((p) => (
+                <option key={p} value={p}>{LLM_PROVIDER_META[p].label}</option>
+              ))}
+            </select>
+            {modelOptions.length > 0 && (
+              <select
+                value={llmModel || modelOptions[0]?.id || ""}
+                onChange={(e) => {
+                  setLlmModel(e.target.value);
+                  saveLlmModel(e.target.value);
+                }}
+                aria-label="LLM model"
+                title={llmModel || "Model"}
+                style={{
+                  maxWidth: 120,
+                  background: "rgba(8,17,31,0.9)",
+                  border: "1px solid rgba(240,237,232,0.12)",
+                  borderRadius: 8,
+                  color: "#f0ede8",
+                  fontSize: 11,
+                  padding: "4px 6px",
+                }}
+              >
+                {modelOptions.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={agentMode}
+              onChange={(e) => {
+                const mode = e.target.value as AgentMode;
+                setAgentMode(mode);
+                saveAgentMode(mode);
+              }}
+              aria-label="Agent mode"
+              title={AGENT_MODE_META[agentMode].hint}
+              style={{
+                maxWidth: 88,
+                background: "rgba(8,17,31,0.9)",
+                border: "1px solid rgba(240,237,232,0.12)",
+                borderRadius: 8,
+                color: "#f0ede8",
+                fontSize: 11,
+                padding: "4px 6px",
+              }}
+            >
+              {(Object.keys(AGENT_MODE_META) as AgentMode[]).map((mode) => (
+                <option key={mode} value={mode}>{AGENT_MODE_META[mode].label}</option>
+              ))}
+            </select>
             {voices.length > 0 && !muted && (
               <select
                 value={voiceURI}
@@ -556,8 +731,11 @@ export default function ApexChat({
           >
             {messages.length === 0 && (
               <p style={{ margin: 0, fontSize: 12, color: "rgba(240,237,232,0.4)", lineHeight: 1.5 }}>
-                Type below, or switch to <span style={{ color: GOLD }}>Voice On</span>. Say
-                “remember …” to save a fact into project memory.
+                Type below, or switch to <span style={{ color: GOLD }}>Voice On</span>. In
+                voice mode say <span style={{ color: CYAN }}>“Caly …”</span>,{" "}
+                <span style={{ color: CYAN }}>“Thia …”</span>, or{" "}
+                <span style={{ color: CYAN }}>“Eli …”</span> (or “Hi/Hello …” before the
+                name) to wake her. Say “remember …” to save a fact into project memory.
               </p>
             )}
             {messages.map((m) => (

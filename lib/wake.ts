@@ -1,16 +1,28 @@
 /**
- * Wake / address phrases for Calythia ("Caly" shortcut).
+ * Wake / address phrases for Calythia ("Caly" / "Thia" / "Eli" shortcuts).
  * Strips leading greetings so spoken commands reach the model cleanly.
  */
 
-const NAME = String.raw`(?:calythia|caly|callie|cali|kali)`;
+/** Spoken names + common STT mishearings */
+const NAME = String.raw`(?:calythia|caly|callie|cali|kali|kelly|kaylee|thia|eli|elly|ellie)`;
+
+/** Optional greeting before the name — allows "Hi," / "Hello," from STT */
 const GREET = String.raw`(?:hey|hi|hello|ok|okay|yo|excuse\s+me)`;
 
-/** Leading: "hey caly …", "caly …", "hey calythia, …" */
-const LEADING = new RegExp(`^\\s*(?:${GREET}\\s+)?${NAME}\\b[,!.?]?\\s*`, "i");
+/**
+ * Leading: "hey caly …", "hi, thia …", "hello eli …", "caly …"
+ * Comma/period between greet and name is common from Chrome STT.
+ */
+const LEADING = new RegExp(
+  `^\\s*(?:${GREET}\\s*[,!.?]?\\s+)?${NAME}\\b[,!.?]?\\s*`,
+  "i",
+);
 
 /** Entire utterance is just the wake / name */
-const WAKE_ONLY = new RegExp(`^\\s*(?:${GREET}\\s+)?${NAME}\\b[,!.?]?\\s*$`, "i");
+const WAKE_ONLY = new RegExp(
+  `^\\s*(?:${GREET}\\s*[,!.?]?\\s+)?${NAME}\\b[,!.?]?\\s*$`,
+  "i",
+);
 
 export type WakeParse =
   | { kind: "wake_only" }

@@ -25,7 +25,8 @@ export type TtsStatus = "loading" | "ready" | "fallback" | "error";
 
 const VOICE_KEY = "calythia-tts-voice";
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
-const LOAD_TIMEOUT_MS = 60_000;
+/** First Hugging Face download can be ~300MB — allow a long window. */
+const LOAD_TIMEOUT_MS = 180_000;
 
 const KOKORO_VOICE_META: { id: string; name: string; lang: string; score: number }[] = [
   { id: "af_heart", name: "Kokoro · Heart", lang: "en-US", score: 100 },
@@ -151,16 +152,17 @@ let sharedKokoroLoad: Promise<"kokoro" | "fallback"> | null = null;
 function kokoroConfig(): {
   device: "webgpu" | "wasm";
   dtype: "fp32" | "q8";
-  allowFallback: boolean;
+  /** Allow system Web Speech only after Kokoro (incl. wasm/q8) fails. Default on. */
+  allowSystemVoice: boolean;
 } {
   const deviceRaw = process.env.NEXT_PUBLIC_KOKORO_DEVICE?.trim().toLowerCase();
   const dtypeRaw = process.env.NEXT_PUBLIC_KOKORO_DTYPE?.trim().toLowerCase();
   const device: "webgpu" | "wasm" = deviceRaw === "wasm" ? "wasm" : "webgpu";
   const dtype: "fp32" | "q8" = dtypeRaw === "q8" ? "q8" : "fp32";
-  const allowFallback =
-    process.env.NEXT_PUBLIC_KOKORO_FALLBACK === "1" ||
-    process.env.NEXT_PUBLIC_KOKORO_FALLBACK === "true";
-  return { device, dtype, allowFallback };
+  const fb = process.env.NEXT_PUBLIC_KOKORO_FALLBACK?.trim().toLowerCase();
+  // Default: allow system voice as last resort. Set FALLBACK=0 to surface hard errors only.
+  const allowSystemVoice = fb !== "0" && fb !== "false" && fb !== "no";
+  return { device, dtype, allowSystemVoice };
 }
 
 /** One Kokoro ONNX load per browser session — shared by every speaker instance. */
@@ -174,31 +176,43 @@ async function loadSharedKokoro(
   sharedKokoroLoad = (async () => {
     try {
       await suppressOnnxWarnings();
+      onStatus?.("loading", "Loading Kokoro package…");
       const mod = await import("kokoro-js");
       const TextSplitterStreamClass = mod.TextSplitterStream as new () => TextSplitterLike;
-      const { device, dtype, allowFallback } = kokoroConfig();
+      const { device, dtype, allowSystemVoice } = kokoroConfig();
 
       const load = async (d: "webgpu" | "wasm", dt: "fp32" | "q8") =>
         (await mod.KokoroTTS.from_pretrained(MODEL_ID, {
           dtype: dt,
           device: d,
-          progress_callback: (p: { status?: string; progress?: number }) => {
+          progress_callback: (p: {
+            status?: string;
+            progress?: number;
+            file?: string;
+          }) => {
             if (p?.status === "progress" && typeof p.progress === "number") {
-              onStatus?.("loading", `Kokoro ${Math.round(p.progress)}%`);
+              const file = p.file ? ` ${p.file.split("/").pop()}` : "";
+              onStatus?.(
+                "loading",
+                `Kokoro ${Math.round(p.progress)}%${file}`,
+              );
+            } else if (p?.status === "download" || p?.status === "downloading") {
+              onStatus?.("loading", "Downloading Kokoro model…");
             }
           },
         })) as unknown as KokoroTTSLike;
 
-      onStatus?.("loading", `Loading Kokoro (${dtype} / ${device})…`);
+      onStatus?.("loading", `Loading Kokoro (${device}/${dtype})…`);
 
       let instance: KokoroTTSLike;
       let label = `${device}/${dtype}`;
       try {
         instance = await withTimeout(load(device, dtype), LOAD_TIMEOUT_MS, label);
       } catch (primaryErr) {
-        if (!allowFallback || (device === "wasm" && dtype === "q8")) throw primaryErr;
+        // Always try wasm/q8 before giving up — WebGPU often fails on first load.
+        if (device === "wasm" && dtype === "q8") throw primaryErr;
         console.warn("[Calythia TTS] primary load failed, trying wasm/q8", primaryErr);
-        onStatus?.("loading", "Trying wasm/q8…");
+        onStatus?.("loading", "WebGPU failed — trying wasm/q8…");
         instance = await withTimeout(load("wasm", "q8"), LOAD_TIMEOUT_MS, "wasm/q8");
         label = "wasm/q8";
       }
@@ -214,6 +228,12 @@ async function loadSharedKokoro(
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Kokoro failed to load";
       console.warn("[Calythia TTS]", msg);
+      const { allowSystemVoice } = kokoroConfig();
+      if (!allowSystemVoice) {
+        sharedKokoroMode = null;
+        onStatus?.("error", msg);
+        throw e;
+      }
       sharedKokoroMode = "fallback";
       onStatus?.("fallback", msg);
       return "fallback";
@@ -223,6 +243,13 @@ async function loadSharedKokoro(
   })();
 
   return sharedKokoroLoad;
+}
+
+/** Clear sticky failed/fallback state so the next speak retries Kokoro. */
+export function resetKokoroLoad() {
+  sharedKokoro = null;
+  sharedKokoroMode = null;
+  sharedKokoroLoad = null;
 }
 
 /** Warm Kokoro once on app load (reuses browser cache on refresh). */

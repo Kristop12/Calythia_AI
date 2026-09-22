@@ -1,0 +1,14 @@
+# Open Interpreter — unified execution (browser, files, shell, scripts)
+# Install NEW CLI: curl -fsSL https://www.openinterpreter.com/install | sh
+
+model_provider = "lmstudio_local"
+model = "google/gemma-4-e4b"
+
+[model_providers.lmstudio_local]
+name = "LM Studio"
+base_url = "http://127.0.0.1:1234/v1"
+env_key = "LM_STUDIO_API_TOKEN"
+wire_api = "chat"
+
+sandbox_mode = "workspace-write"
+approval_policy = "never"

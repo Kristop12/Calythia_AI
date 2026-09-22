@@ -3,6 +3,8 @@
  * Only matching tool schemas are sent to LM Studio (faster, safer).
  */
 
+import { normalizeAgentMode, type AgentMode } from "@/lib/agentMode";
+
 export type ToolGroup =
   | "filesystem"
   | "applications"
@@ -218,11 +220,65 @@ export function allowedToolsForQuery(userText: string): string[] | null {
   return [...tools];
 }
 
-export function describeToolRouting(userText: string): {
+/** Fast discrete actions personal-pc handles reliably (open URL, browser, list files). */
+export function wantsDiscretePcAction(userText: string): boolean {
+  const tools = allowedToolsForQuery(userText);
+  if (!tools?.length) return false;
+  if (wantsOpenInterpreter(userText)) return false;
+  return true;
+}
+
+/** Any task that needs live execution on the Mac (browser, files, scripts, automation). */
+export function wantsExecution(userText: string): boolean {
+  const q = userText.toLowerCase().trim();
+  if (!q || isChitchat(q)) return false;
+  return selectToolGroups(userText).length > 0 || wantsOpenInterpreter(userText);
+}
+
+/** Coding / automation phrasing (subset of wantsExecution). */
+export function wantsOpenInterpreter(userText: string): boolean {
+  const q = userText.toLowerCase().trim();
+  if (!q || isChitchat(q)) return false;
+  return /\b(write (a )?(python|script|code)|run (this )?(python|script|code)|automate|pip install|debug (this|the|my)|refactor|jupyter|notebook|matplotlib|pandas|numpy|analyze (the )?data|parse (this )?(csv|json|xml|log)|scrape|crawl|plot (this|the|a)|convert .+ to)\b/i.test(
+    q,
+  );
+}
+
+/** All personal-pc tool names (for forced PC mode). */
+export function allPersonalPcTools(): string[] {
+  const tools = new Set<string>();
+  for (const g of Object.keys(TOOLS) as ToolGroup[]) {
+    for (const t of TOOLS[g]) tools.add(t);
+  }
+  return [...tools];
+}
+
+export function describeToolRouting(
+  userText: string,
+  agentMode: AgentMode = "auto",
+): {
   groups: ToolGroup[];
   tools: string[];
+  openInterpreter: boolean;
+  agentMode: AgentMode;
 } {
+  const mode = normalizeAgentMode(agentMode);
   const groups = selectToolGroups(userText);
-  const tools = allowedToolsForQuery(userText) ?? [];
-  return { groups, tools };
+  let tools = allowedToolsForQuery(userText) ?? [];
+  const trimmed = userText.trim();
+  const chitchat = isChitchat(trimmed.toLowerCase());
+
+  let openInterpreter = false;
+  if (mode === "off" || chitchat) {
+    tools = [];
+  } else if (mode === "code" || mode === "auto") {
+    openInterpreter = wantsExecution(userText);
+    tools = [];
+  } else if (mode === "pc") {
+    tools = tools.length ? tools : allPersonalPcTools();
+  } else {
+    openInterpreter = wantsExecution(userText);
+  }
+
+  return { groups, tools, openInterpreter, agentMode: mode };
 }

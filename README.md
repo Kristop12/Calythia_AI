@@ -61,6 +61,59 @@ Calythia can call the same MCP servers you configured in LM Studio (`~/.lmstudio
 
 Without those server settings, chat still works via `/v1/chat/completions` (no tools). With MCP on, chat uses `POST /api/v1/chat` and streams replies the same way in the UI.
 
+### Jarvis native tools (recommended)
+
+Calythia owns a **native tool registry** — the LLM is only the brain; the Next.js server runs tools and feeds results back (same pattern as coding agents).
+
+```
+Calythia (voice, memory, tool router)
+        │
+        ▼
+   Local LM Studio ──or── Grok (xAI API)
+        │
+   ┌────┴────┬────────────┬──────────┐
+   ▼         ▼            ▼          ▼
+open_url  run_terminal  browse_web  youtube_info
+   │         │            │          │
+ Browser    shell      Browser Use  yt-dlp
+```
+
+In the Messages header, pick **Local** or **Grok**, then a model. Native tools still run on your Mac either way.
+
+| Agent mode | Execution |
+|------------|-----------|
+| **Auto** | Native tools when your message needs PC/browser/files/scripts |
+| **Agent** | Full native tool set every turn |
+| **PC** | Legacy `personal-pc` MCP only (fallback; Local provider only) |
+| **Chat** | No tools |
+
+**Native tools:** `open_url`, `run_terminal`, `read_file`, `list_directory`, `youtube_info`, `youtube_transcript`, `browse_web`, `run_agent_task` (Open Interpreter exec).
+
+Preview: `http://localhost:3000/api/mcp?q=open%20youtube&mode=auto` — check `nativeToolNames` and `useNativeTools`.
+
+**Setup:**
+
+1. `CALYTHIA_NATIVE_TOOLS=1` in `.env.local` (see [`.env.example`](.env.example))
+2. **yt-dlp:** `brew install yt-dlp` (YouTube metadata — not AI browser)
+3. **Open Interpreter:** `curl -fsSL https://www.openinterpreter.com/install | sh` — used by `run_agent_task`
+4. **Browser Use:** Python 3.12 venv at `~/.venvs/browser-use` with `uv pip install browser-use` + `uvx browser-use install`
+5. **Local model:** Prefer a **tool-calling / coder model** in LM Studio (Qwen3-Coder, etc.)
+
+### Grok (xAI) cloud brain
+
+1. Create an API key at [console.x.ai](https://console.x.ai)
+2. In `.env.local`:
+   ```bash
+   XAI_API_KEY=xai-...
+   XAI_MODEL=grok-4.6
+   ```
+3. Restart `npm run dev`
+4. In chat: set provider to **Grok**, pick a model (list from `/api/models?provider=grok`)
+
+MCP / personal-pc integrations apply only when provider is **Local**. Browser Use / Open Interpreter sidecars still use LM Studio for their own LLM calls.
+
+### Open Interpreter + MCP (fallback)
+
 **Mic / STT:** Chrome’s built-in speech recognition talks to Google and often fails with `network`. Calythia records audio in the browser and sends it to LM Studio’s **`/v1/audio/transcriptions`** instead. Load a **Whisper** (speech-to-text) model in LM Studio; optionally set `LM_STUDIO_WHISPER_MODEL` in `.env.local`.
 
 The Next.js route `POST /api/chat` proxies chat (with optional MCP), and `POST /api/transcribe` proxies Whisper, so the browser never talks to LM Studio directly (avoids CORS).
@@ -78,8 +131,12 @@ The Next.js route `POST /api/chat` proxies chat (with optional MCP), and `POST /
 | `ApexWorld` | Composes the above; owns orb state, chat wiring, and agent overview cards |
 | `ApexChat` | LM Studio chat panel — streams replies and drives orb + TTS |
 | `ApexOverviewPanel` | Top-left HUD: live clock, weather, and social links |
-| `app/api/chat` | Streaming proxy to LM Studio + RAG + optional MCP tools |
-| `app/api/mcp` | Lists MCP servers Calythia will request from LM Studio |
+| `app/api/chat` | LM Studio or Grok + native tool loop + RAG; MCP fallback (Local only) |
+| `app/api/models` | List LM Studio / Grok models for the UI picker |
+| `app/api/mcp` | Debug: MCP servers + native tool routing preview |
+| `lib/agentLoop.ts` | Tool-calling loop against `/v1/chat/completions` |
+| `lib/llmProvider.ts` | Resolve Local vs Grok OpenAI-compatible targets |
+| `lib/tools/` | Native Jarvis tool registry (browser, terminal, yt-dlp, OI) |
 | `app/api/memory` | List / append project memory notes |
 | `lib/rag.ts` | Load `memory/*.md`, retrieve top chunks for each query |
 | `lib/lmstudio.ts` | LM Studio origin helpers + mcp.json → integrations |

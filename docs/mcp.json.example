@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "personal-pc": {
+      "command": "...",
+      "args": ["..."]
+    },
+    "open-interpreter": {
+      "command": "/Users/kristoffer/.local/bin/interpreter",
+      "args": ["mcp-server"],
+      "env": {
+        "LM_STUDIO_API_TOKEN": "your-lm-studio-token"
+      }
+    }
+  }
+}
