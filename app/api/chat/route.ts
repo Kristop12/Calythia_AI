@@ -32,6 +32,8 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** Allow long tool rounds (browser / Open Interpreter) before the final reply. */
+export const maxDuration = 300;
 
 function lastUserText(messages: ChatMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {

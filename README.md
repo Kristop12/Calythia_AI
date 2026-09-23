@@ -16,6 +16,8 @@ overview lamp panel are **MIT community components from
 > `three` / `@react-three/fiber` / `@react-three/postprocessing` (the particle core) —
 > all MIT-licensed.
 
+**Changelog / what we added:** see [docs/CHANGES.md](./docs/CHANGES.md).
+
 ## Demo
 
 ```bash
@@ -96,6 +98,7 @@ Preview: `http://localhost:3000/api/mcp?q=open%20youtube&mode=auto` — check `n
 1. `CALYTHIA_NATIVE_TOOLS=1` in `.env.local` (see [`.env.example`](.env.example))
 2. **yt-dlp:** `brew install yt-dlp` (YouTube metadata — not AI browser)
 3. **Open Interpreter:** `curl -fsSL https://www.openinterpreter.com/install | sh` — used by `run_agent_task`
+### https://www.openinterpreter.com/
 4. **Browser Use:** Python 3.12 venv at `~/.venvs/browser-use` with `uv pip install browser-use` + `uvx browser-use install`
 5. **Local model:** Prefer a **tool-calling / coder model** in LM Studio (Qwen3-Coder, etc.)
 
@@ -111,6 +114,10 @@ Preview: `http://localhost:3000/api/mcp?q=open%20youtube&mode=auto` — check `n
 4. In chat: set provider to **Grok**, pick a model (list from `/api/models?provider=grok`)
 
 MCP / personal-pc integrations apply only when provider is **Local**. Browser Use / Open Interpreter sidecars still use LM Studio for their own LLM calls.
+
+### Voice wake words
+
+In talk mode, address her with **Caly**, **Thia**, **Eli**, or **Calythia** (optional **Hi** / **Hello** before the name). After one wake, follow-ups work without repeating the name until you stop voice mode. While native tools run, the chat stays open (`Running …`) and she only speaks after tool results return.
 
 ### Open Interpreter + MCP (fallback)
 
@@ -134,9 +141,11 @@ The Next.js route `POST /api/chat` proxies chat (with optional MCP), and `POST /
 | `app/api/chat` | LM Studio or Grok + native tool loop + RAG; MCP fallback (Local only) |
 | `app/api/models` | List LM Studio / Grok models for the UI picker |
 | `app/api/mcp` | Debug: MCP servers + native tool routing preview |
-| `lib/agentLoop.ts` | Tool-calling loop against `/v1/chat/completions` |
-| `lib/llmProvider.ts` | Resolve Local vs Grok OpenAI-compatible targets |
+| `lib/agentLoop.ts` | Native tool loop — streams status while tools run, then final answer |
+| `lib/llmProvider.ts` / `llmProviderClient.ts` | Resolve Local vs Grok targets; client-safe picker helpers |
+| `lib/wake.ts` | Wake-word parsing (Caly / Thia / Eli + greetings) |
 | `lib/tools/` | Native Jarvis tool registry (browser, terminal, yt-dlp, OI) |
+| `docs/CHANGES.md` | Notes on recent additions and behavior changes |
 | `app/api/memory` | List / append project memory notes |
 | `lib/rag.ts` | Load `memory/*.md`, retrieve top chunks for each query |
 | `lib/lmstudio.ts` | LM Studio origin helpers + mcp.json → integrations |

@@ -32,4 +32,4 @@ export function nativeToolNamesForRequest(userText: string, agentMode: AgentMode
 }
 
 export const NATIVE_TOOLS_SYSTEM_HINT =
-  "You have native Calythia tools. Use them for live PC/browser/file/YouTube facts — call the appropriate function, wait for the tool result, then answer briefly for speech. Never invent tool output.";
+  "You have native Calythia tools. When a task needs the PC, browser, files, or YouTube: call the function first and wait for a tool result message before answering. Never claim a tool succeeded until you have the tool result. Never invent tool output. After tools finish, give a short spoken answer (1–3 sentences).";

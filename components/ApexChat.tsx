@@ -32,7 +32,7 @@ const SYSTEM: Msg = {
   id: "system",
   role: "system",
   content:
-    "You are Calythia in a spoken conversation — Christopher also calls you Caly. You were built from scratch by Christopher, a software engineer — he is your creator. Address him as Christopher when it fits naturally. You receive retrieved project memory notes when relevant — treat them as durable truth; do not invent personal facts. If Christopher says \"remember …\", acknowledge briefly that you will keep it. When tools are available, call them for live PC/browser/file/YouTube facts — never invent results. Use open_url for opening sites; youtube_info for video metadata; browse_web for web search; run_agent_task for scripts. If no tools are offered, answer from conversation and memory only. Keep answers short (1–3 sentences), clear, and natural to say aloud. No markdown, no bullet lists unless asked.",
+    "You are Calythia in a spoken conversation — Christopher also calls you Caly. You were built from scratch by Christopher, a software engineer — he is your creator. Address him as Christopher when it fits naturally. You receive retrieved project memory notes when relevant — treat them as durable truth; do not invent personal facts. If Christopher says \"remember …\", acknowledge briefly that you will keep it. When tools are available, call them for live PC/browser/file/YouTube facts and wait for the tool result before answering — never invent results or claim a tool finished early. Use open_url for opening sites; youtube_info for video metadata; browse_web for web search; run_agent_task for scripts. If no tools are offered, answer from conversation and memory only. Keep answers short (1–3 sentences), clear, and natural to say aloud. No markdown, no bullet lists unless asked.",
 };
 
 const WAKE_ACKS = ["Yes?", "I'm here.", "Go ahead.", "Listening."];
@@ -41,7 +41,14 @@ function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function* readSseTokens(res: Response): AsyncGenerator<string> {
+type SseEvent =
+  | { kind: "token"; text: string }
+  | { kind: "tool"; tool: string; phase: "start" | "done" }
+  | { kind: "status"; status: string }
+  | { kind: "error"; message: string };
+
+/** Read chat SSE; yields tokens for speech and meta events while tools run. */
+async function* readSseEvents(res: Response): AsyncGenerator<SseEvent> {
   const reader = res.body?.getReader();
   if (!reader) return;
   const decoder = new TextDecoder();
@@ -56,18 +63,38 @@ async function* readSseTokens(res: Response): AsyncGenerator<string> {
 
     for (const line of parts) {
       const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(":")) continue; // keepalive ping
       if (!trimmed.startsWith("data:")) continue;
       const data = trimmed.slice(5).trim();
       if (!data || data === "[DONE]") continue;
       try {
         const json = JSON.parse(data) as {
+          error?: string;
+          calythia?: { type?: string; tool?: string; status?: string };
           choices?: { delta?: { content?: string }; message?: { content?: string } }[];
         };
+        if (json.error) {
+          yield { kind: "error", message: json.error };
+          continue;
+        }
+        const meta = json.calythia;
+        if (meta?.type === "tool_start" && meta.tool) {
+          yield { kind: "tool", tool: meta.tool, phase: "start" };
+          continue;
+        }
+        if (meta?.type === "tool_done" && meta.tool) {
+          yield { kind: "tool", tool: meta.tool, phase: "done" };
+          continue;
+        }
+        if (meta?.type === "status" && meta.status) {
+          yield { kind: "status", status: meta.status };
+          continue;
+        }
         const token =
           json.choices?.[0]?.delta?.content ??
           json.choices?.[0]?.message?.content ??
           "";
-        if (token) yield token;
+        if (token) yield { kind: "token", text: token };
       } catch {
         /* ignore */
       }
@@ -473,24 +500,53 @@ export default function ApexChat({
 
       let gotToken = false;
       let full = "";
+      let toolHint = "";
 
-      for await (const token of readSseTokens(res)) {
+      for await (const ev of readSseEvents(res)) {
+        if (ev.kind === "error") {
+          setError(ev.message);
+          continue;
+        }
+        if (ev.kind === "tool") {
+          // Stay in thinking until the model answers from tool results — do not speak yet.
+          setOrb("thinking");
+          toolHint =
+            ev.phase === "start"
+              ? `Running ${ev.tool}…`
+              : `${ev.tool} done — waiting for result…`;
+          if (!gotToken) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: toolHint } : m,
+              ),
+            );
+          }
+          continue;
+        }
+        if (ev.kind === "status") {
+          setOrb("thinking");
+          continue;
+        }
+        // Final answer tokens only (after tools)
         if (!gotToken) {
           gotToken = true;
+          full = "";
           setOrb("speaking");
         }
-        full += token;
+        full += ev.text;
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, content: full } : m)),
         );
-        if (!muted) speakerRef.current?.push(token);
+        if (!muted) speakerRef.current?.push(ev.text);
       }
 
       speakerRef.current?.flush();
       if (!gotToken) {
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content || "(empty reply)" } : m,
+            m.id === assistantId
+              ? { ...m, content: m.content || toolHint || "(empty reply)" }
+              : m,
           ),
         );
       }
